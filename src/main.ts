@@ -9,18 +9,33 @@ import { Wishlist } from './task7-wishlist';
 // ============================================================
 // ИСХОДНОЕ СОСТОЯНИЕ
 // ============================================================
-let catalog = new BookCatalog('main', [
-  { id: '1', title: 'TypeScript Guide', authors: ['John Doe'], year: 2024 },
-  { id: '2', title: 'JavaScript Basics', authors: ['Jane Smith'], year: 2022 },
-]);
+type AsyncState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success', data: T }
+  | { status: 'error', message: string };
 
+let state: AsyncState<Book[]> = { status: 'loading' };
+let saveErrorMessage = '';
+
+let catalog = new BookCatalog('main', []);
 let wishlist = new Wishlist();
 
 // Загрузка из localStorage (в практике 4-1 переедет в mock-api.ts)
-const savedCatalog = localStorage.getItem('catalog');
-if (savedCatalog) {
-  const parsed = JSON.parse(savedCatalog);
-  catalog = new BookCatalog(parsed.id, parsed.books);
+async function fetchBooks(): Promise<Book[]> {
+  await new Promise(resolve => setTimeout(resolve, 800));
+  if (Math.random() < 0.2) {
+    throw new Error('Сбой сети. Не удалось загрузить книги.');
+  }
+  const savedCatalog = localStorage.getItem('catalog');
+  if (savedCatalog) {
+    const parsed = JSON.parse(savedCatalog);
+    return parsed.books;
+  }
+  return [
+    { id: '1', title: 'TypeScript Guide', authors: ['John Doe'], year: 2024 },
+    { id: '2', title: 'JavaScript Basics', authors: ['Jane Smith'], year: 2022 },
+  ];
 }
 
 const savedWishlist = localStorage.getItem('wishlist');
@@ -31,11 +46,25 @@ if (savedWishlist) {
 // ============================================================
 // СОХРАНЕНИЕ (в практике 4-1 переедет в mock-api.ts)
 // ============================================================
-function saveCatalog() {
+async function saveBooks(books: Book[]): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 500));
   localStorage.setItem('catalog', JSON.stringify({
     id: catalog.id,
-    books: catalog.getBooks()
+    books: books
   }));
+}
+
+async function saveCatalog() {
+  try {
+    await saveBooks(catalog.getBooks());
+    saveErrorMessage = '';
+  } catch (error) {
+    saveErrorMessage = error instanceof Error ? error.message : 'Ошибка сохранения';
+    setTimeout(() => {
+      saveErrorMessage = '';
+      render();
+    }, 3000);
+  }
 }
 
 function saveWishlist() {
@@ -75,10 +104,13 @@ function createBookCard(book: Book): HTMLDivElement {
   // Кнопка «Удалить»
   const deleteBtn = document.createElement('button');
   deleteBtn.textContent = 'Удалить';
-  deleteBtn.addEventListener('click', () => {
+  deleteBtn.addEventListener('click', async () => {
     catalog.removeBook(book.id);
-    saveCatalog();
-    updateView();
+    await saveCatalog();
+    if (state.status === 'success') {
+      state = { status: 'success', data: catalog.getBooks() };
+    }
+    render();
   });
   card.append(deleteBtn);
 
@@ -140,22 +172,73 @@ function updateView() {
   renderWishlist();
 }
 
+function render() {
+  bookList.innerHTML = '';
+  wishlistContainer.innerHTML = '';
+
+  if (saveErrorMessage) {
+    const saveErrorDiv = document.createElement('div');
+    saveErrorDiv.textContent = saveErrorMessage;
+    saveErrorDiv.style.color = 'orange';
+    bookList.append(saveErrorDiv);
+  }
+
+  switch (state.status) {
+    case 'idle':
+      bookList.textContent = 'Нажмите для загрузки...';
+      break;
+    case 'loading':
+      bookList.textContent = 'Загрузка данных...';
+      break;
+    case 'success':
+      updateView();
+      break;
+    case 'error':
+      const errorDiv = document.createElement('div');
+      errorDiv.textContent = state.message;
+      errorDiv.style.color = 'red';
+      const retryBtn = document.createElement('button');
+      retryBtn.textContent = 'Повторить попытку';
+      retryBtn.addEventListener('click', initApp);
+      errorDiv.append(retryBtn);
+      bookList.append(errorDiv);
+      break;
+  }
+}
+
 // Первичная отрисовка
-updateView();
+async function initApp() {
+  state = { status: 'loading' };
+  saveErrorMessage = '';
+  render();
+  try {
+    const books = await fetchBooks();
+    catalog = new BookCatalog('main', books);
+    state = { status: 'success', data: books };
+  } catch (error) {
+    state = { status: 'error', message: error instanceof Error ? error.message : 'Неизвестная ошибка' };
+  }
+  render();
+}
+
+document.addEventListener('DOMContentLoaded', initApp);
 
 // ============================================================
 // ОБРАБОТЧИК ФОРМЫ
 // ============================================================
-form.addEventListener('submit', (e) => {
+form.addEventListener('submit', async (e) => {
   e.preventDefault();
   errorMessage.textContent = '';
+  if (state.status !== 'success') return;
+
   try {
     const formData = new FormData(form);
     const newBook = createBookFromForm(formData);
     catalog.addBook(newBook);
-    saveCatalog();
+    await saveCatalog();
+    state = { status: 'success', data: catalog.getBooks() };
     form.reset();
-    updateView();
+    render();
   } catch (error) {
     if (error instanceof Error) {
       errorMessage.textContent = error.message;
